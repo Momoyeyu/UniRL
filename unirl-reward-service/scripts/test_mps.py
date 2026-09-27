@@ -82,16 +82,31 @@ def test_rejects_unqualified_backend(tmp_path: Path) -> None:
         load_config(_config(tmp_path, scorer="unified_reward"))
 
 
-def test_rejects_unsafe_float16_clip_limit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("scorer", ["clip", "pickscore"])
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+def test_rejects_half_precision_partial_limit(
+    tmp_path: Path, scorer: str, dtype: str
+) -> None:
     with pytest.raises(ValueError, match="only qualified"):
         load_config(
             _config(
                 tmp_path,
-                scorer="clip",
-                params={"dtype": "float16"},
+                scorer=scorer,
+                params={"dtype": dtype},
                 mps={"active_thread_percentage": 50},
             )
         )
+
+
+def test_allows_float32_partial_limit(tmp_path: Path) -> None:
+    cfg = load_config(
+        _config(
+            tmp_path,
+            params={"dtype": "float32"},
+            mps={"active_thread_percentage": 50},
+        )
+    )
+    assert cfg.rewards[0].mps.active_thread_percentage == 50
 
 
 def _fake_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
@@ -216,7 +231,7 @@ def test_non_mps_actor_options_are_unchanged(tmp_path: Path) -> None:
     }
 
 
-def test_group_drains_before_kill(monkeypatch) -> None:
+def test_group_drains_before_kill_only_when_mps(monkeypatch) -> None:
     events = []
     actor = SimpleNamespace(
         shutdown=SimpleNamespace(remote=lambda: events.append("drain") or object()),
@@ -227,12 +242,34 @@ def test_group_drains_before_kill(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "reward_service.workers.group.ray.kill",
-        lambda actor, no_restart: events.append("kill"),
+        lambda actor, no_restart=False: events.append("kill"),
     )
     group = WorkerGroup.__new__(WorkerGroup)
-    group.cfg = SimpleNamespace(name="test")
+    group.cfg = SimpleNamespace(name="test", mps=MpsClientCfg(100))
     group.actors = [actor]
 
     group.shutdown()
 
     assert events == ["drain", "wait", "kill"]
+
+
+def test_non_mps_group_kills_without_drain(monkeypatch) -> None:
+    events = []
+    actor = SimpleNamespace(
+        shutdown=SimpleNamespace(remote=lambda: events.append("drain") or object()),
+    )
+    monkeypatch.setattr(
+        "reward_service.workers.group.ray.get",
+        lambda refs, timeout: events.append("wait"),
+    )
+    monkeypatch.setattr(
+        "reward_service.workers.group.ray.kill",
+        lambda actor, no_restart=False: events.append("kill"),
+    )
+    group = WorkerGroup.__new__(WorkerGroup)
+    group.cfg = SimpleNamespace(name="test", mps=None)
+    group.actors = [actor]
+
+    group.shutdown()
+
+    assert events == ["kill"]

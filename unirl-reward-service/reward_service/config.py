@@ -263,9 +263,11 @@ def _parse_mps_client_cfg(
             f"qualified scorers: {_MPS_QUALIFIED_SCORERS}"
         )
     dtype = str(params.get("dtype", "")).lower()
-    if scorer == "clip" and dtype in {"float16", "fp16", "half"} and active < 100:
+    # On the qualified H20 stack, float16/bfloat16 GEMMs under a partial MPS
+    # limit return wrong values (sometimes finite, sometimes NaN).
+    if dtype in {"float16", "fp16", "half", "bfloat16", "bf16"} and active < 100:
         raise ValueError(
-            f"{context} float16 CLIP is only qualified with "
+            f"{context} {dtype} is only qualified with "
             "mps.active_thread_percentage=100"
         )
     return MpsClientCfg(

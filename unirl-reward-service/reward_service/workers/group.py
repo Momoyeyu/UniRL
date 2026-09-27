@@ -157,7 +157,11 @@ class WorkerGroup:
         actors, self.actors = self.actors, []
         if not actors:
             return
-        logger.info("WorkerGroup[%s] draining %d actors", self.cfg.name, len(actors))
+        if self.cfg.mps is None:
+            for actor in actors:
+                ray.kill(actor)
+            return
+        logger.info("WorkerGroup[%s] draining %d MPS actors", self.cfg.name, len(actors))
         try:
             ray.get([actor.shutdown.remote() for actor in actors], timeout=30)
         except Exception:
